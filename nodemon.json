@@ -1,0 +1,15 @@
+{
+	"watch": ["app.js", "config", "controllers", "middlewares", "models", "services", "utils"],
+	"ext": "js,json",
+	"ignore": [
+		"_IGNORE_*/**",
+		"**/_IGNORE_*/**",
+		"*.data.json",
+		"**/*.data.json",
+		"logs/**",
+		"node_modules/**",
+		"patches/**",
+		".git/**"
+	],
+	"delay": 2000
+}

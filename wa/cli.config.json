@@ -1,0 +1,9 @@
+{
+	"useChrome": true,
+	"multiDevice": true,
+	"autoRefresh": true,
+	"qrTimeout": 0,
+	"authTimeout": 0,
+	"blockCrashLogs": true,
+	"skipUpdateCheck": true
+}

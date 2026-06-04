@@ -4,3 +4,15 @@ tmp/
 .env.dev
 .env.l2p
 keys/
+.wwebjs_auth/
+.wwebjs_cache/
+_IGNORE_*/
+*.data.json
+open-wa-session*/
+open-wa-whatsapp-automation-poc.sw_col.json
+
+# managed
+**.data.json
+**.node-persist**
+**_IGNORE_**
+# end managed

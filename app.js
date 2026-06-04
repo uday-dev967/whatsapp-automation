@@ -54,6 +54,9 @@ const load = async function () {
 	// Load config which will be a dependency injection
 	const config = { CONSTANTS: require(configDir + "/constants"), ...require(configDir + "/conf"), rootDir };
 
+	const { connectDatabase } = require(configDir + "/database");
+	await connectDatabase();
+
 	// Load all services by iterating and requiring files inside /services
 	utils.dirIterator(servicesDir, function (filename, filepath) {
 		let serviceName = filename.charAt(0).toUpperCase() + filename.slice(1);
@@ -90,10 +93,16 @@ const load = async function () {
 		// Get subroute routes and inject the Services and config dependency
 		let routeConfig = controllerConfig.routes({ Services, config: config });
 
-		// For each sub route defined in a controller load it in the express router with appropriate middlewares
-		for (let subRouteName in routeConfig) {
-			let subRouteConfig = routeConfig[subRouteName];
+		// Register static paths before :param paths so /status is not captured as an id
+		const routeEntries = Object.entries(routeConfig).sort(([keyA], [keyB]) => {
+			const paramA = keyA.includes(":");
+			const paramB = keyB.includes(":");
+			if (paramA !== paramB) return paramA ? 1 : -1;
+			return 0;
+		});
 
+		for (const [subRouteKey, subRouteConfig] of routeEntries) {
+			let subRouteName = subRouteKey;
 			// If localMiddlewares dont exist then keep default no middlewares
 			subRouteConfig.localMiddlewares = subRouteConfig.localMiddlewares || [];
 
