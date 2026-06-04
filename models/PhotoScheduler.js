@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const photoSchedulerSchema = new mongoose.Schema(
+const screenshotDispatchScheduleSchema = new mongoose.Schema(
 	{
 		name: {
 			type: String,
@@ -12,12 +12,6 @@ const photoSchedulerSchema = new mongoose.Schema(
 			ref: "WhatsAppGroup",
 			required: true,
 		},
-		photos: [
-			{
-				type: mongoose.Schema.Types.ObjectId,
-				ref: "Photo",
-			},
-		],
 		cron: {
 			type: String,
 			required: true,
@@ -26,6 +20,11 @@ const photoSchedulerSchema = new mongoose.Schema(
 		timezone: {
 			type: String,
 			default: "Asia/Kolkata",
+			trim: true,
+		},
+		caption: {
+			type: String,
+			default: "",
 			trim: true,
 		},
 		isRunning: {
@@ -40,4 +39,4 @@ const photoSchedulerSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
-module.exports = mongoose.model("PhotoScheduler", photoSchedulerSchema);
+module.exports = mongoose.model("PhotoScheduler", screenshotDispatchScheduleSchema);

@@ -40,7 +40,7 @@ function scheduleNotFoundResponse(scheduleId) {
 			message: "Photo dispatch schedule not found in database",
 			scheduleId,
 			hint:
-				"Call GET /Automation/v1.0/photo-dispatch-schedules and use schedules[]._id — not a target group or photo _id",
+				"Call GET /Automation/v1.0/screenshot-dispatch-schedules and use schedules[]._id — not a target group _id",
 		},
 	};
 }

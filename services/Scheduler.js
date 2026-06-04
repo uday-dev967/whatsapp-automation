@@ -1,79 +1,100 @@
-const cron = require("node-cron");
 const PhotoScheduler = require("../models/PhotoScheduler");
 const WhatsAppGroup = require("../models/WhatsAppGroup");
 const { logger } = require("../utils");
 
 module.exports = async function ({ config, Services }) {
-	const cronTasks = new Map();
-
 	async function loadScheduler(schedulerId) {
-		return PhotoScheduler.findById(schedulerId).populate("group").populate("photos");
+		return PhotoScheduler.findById(schedulerId).populate("group");
 	}
 
-	async function dispatchScheduler(scheduler) {
-		if (!scheduler?.isActive) {
-			return { ok: false, reason: "scheduler_inactive" };
+	async function resolveTargetSchedules({ scheduleId, groupId }) {
+		if (scheduleId) {
+			const schedule = await loadScheduler(scheduleId);
+			if (!schedule) {
+				return { ok: false, reason: "scheduler_not_found" };
+			}
+			if (!schedule.isActive) {
+				return { ok: false, reason: "scheduler_inactive" };
+			}
+			if (!schedule.isRunning) {
+				return { ok: false, reason: "scheduler_not_running" };
+			}
+			return { ok: true, schedules: [schedule] };
+		}
+
+		const filter = { isRunning: true, isActive: true };
+		if (groupId) {
+			const group = await WhatsAppGroup.findById(groupId);
+			if (!group) {
+				return { ok: false, reason: "group_not_found" };
+			}
+			filter.group = groupId;
+		}
+
+		const schedules = await PhotoScheduler.find(filter).populate("group");
+		return { ok: true, schedules };
+	}
+
+	async function dispatchScreenshot(image, options = {}) {
+		const { scheduleId, groupId, caption: captionOverride } = options;
+
+		if (!image?.buffer?.length) {
+			return { ok: false, reason: "missing_screenshot" };
 		}
 		if (!Services.Whatsapp?.isReady?.()) {
-			console.log(`Scheduler "${scheduler.name}" skipped — WhatsApp is not ready`);
 			return { ok: false, reason: "whatsapp_not_ready" };
 		}
 
-		const group = scheduler.group;
-		if (!group || !group.isActive) {
-			console.log(`Scheduler "${scheduler.name}" skipped — group missing or inactive`);
-			return { ok: false, reason: "group_inactive" };
+		const resolved = await resolveTargetSchedules({ scheduleId, groupId });
+		if (!resolved.ok) {
+			return resolved;
 		}
 
-		const photos = (scheduler.photos || []).filter((photo) => photo && photo.isActive);
-		if (!photos.length) {
-			console.log(`Scheduler "${scheduler.name}" skipped — no active photos`);
-			return { ok: false, reason: "no_photos" };
+		if (!resolved.schedules.length) {
+			return { ok: false, reason: "no_running_schedules" };
 		}
 
-		let sent = 0;
-		for (const photo of photos) {
-			await Services.Whatsapp.sendImageFromUrl(
+		const targetsByChatId = new Map();
+		for (const schedule of resolved.schedules) {
+			const group = schedule.group;
+			if (!group?.isActive || !group?.chatId) {
+				continue;
+			}
+			targetsByChatId.set(String(group.chatId), { schedule, group });
+		}
+
+		if (!targetsByChatId.size) {
+			return { ok: false, reason: "no_active_target_groups" };
+		}
+
+		const results = [];
+		for (const { schedule, group } of targetsByChatId.values()) {
+			const caption = captionOverride || schedule.caption || schedule.name || "";
+			await Services.Whatsapp.sendImageBuffer(
 				group.chatId,
-				photo.url,
-				photo.caption || photo.title
+				image.buffer,
+				image.mimetype,
+				caption,
+				image.filename
 			);
-			sent += 1;
+			results.push({
+				ok: true,
+				scheduleId: schedule._id,
+				scheduleName: schedule.name,
+				groupId: group._id,
+				groupName: group.name,
+				chatId: group.chatId,
+			});
 			console.log(
-				`Sent "${photo.title}" → group "${group.name}" [scheduler: ${scheduler.name}]`
+				`Screenshot sent → "${group.name}" [schedule: ${schedule.name}]`
 			);
 		}
 
-		return { ok: true, sent, schedulerId: scheduler._id, schedulerName: scheduler.name };
-	}
-
-	function registerCronTask(scheduler) {
-		if (!cron.validate(scheduler.cron)) {
-			throw new Error(`Invalid cron for scheduler "${scheduler.name}": ${scheduler.cron}`);
-		}
-
-		const task = cron.schedule(
-			scheduler.cron,
-			async () => {
-				const fresh = await loadScheduler(scheduler._id);
-				if (!fresh?.isRunning) {
-					return;
-				}
-				await dispatchScheduler(fresh);
-			},
-			{ timezone: scheduler.timezone || config.scheduler.timezone }
-		);
-
-		cronTasks.set(String(scheduler._id), task);
-	}
-
-	function unregisterCronTask(schedulerId) {
-		const key = String(schedulerId);
-		const task = cronTasks.get(key);
-		if (task) {
-			task.stop();
-			cronTasks.delete(key);
-		}
+		return {
+			ok: true,
+			sent: results.length,
+			results,
+		};
 	}
 
 	async function startScheduler(schedulerId) {
@@ -90,30 +111,17 @@ module.exports = async function ({ config, Services }) {
 		if (!scheduler.group.isActive) {
 			return { ok: false, reason: "group_inactive" };
 		}
-		if (!scheduler.photos?.length) {
-			return { ok: false, reason: "no_photos_linked" };
-		}
 
-		const activePhotos = scheduler.photos.filter((p) => p && p.isActive);
-		if (!activePhotos.length) {
-			return { ok: false, reason: "no_active_photos" };
-		}
-
-		if (config.scheduler.enabled === false) {
-			return { ok: false, reason: "scheduler_disabled_globally" };
-		}
-
-		if (scheduler.isRunning && cronTasks.has(String(scheduler._id))) {
+		if (scheduler.isRunning) {
 			return { ok: true, alreadyRunning: true, scheduler: formatScheduler(scheduler) };
 		}
-
-		unregisterCronTask(scheduler._id);
-		registerCronTask(scheduler);
 
 		scheduler.isRunning = true;
 		await scheduler.save();
 
-		console.log(`Scheduler started: "${scheduler.name}" (${scheduler._id}) — ${scheduler.cron}`);
+		console.log(
+			`Schedule enabled: "${scheduler.name}" (${scheduler._id}) — frontend should capture & POST screenshot every: ${scheduler.cron}`
+		);
 		return { ok: true, started: true, scheduler: formatScheduler(scheduler) };
 	}
 
@@ -123,20 +131,11 @@ module.exports = async function ({ config, Services }) {
 			return { ok: false, reason: "scheduler_not_found" };
 		}
 
-		unregisterCronTask(scheduler._id);
 		scheduler.isRunning = false;
 		await scheduler.save();
 
-		console.log(`Scheduler stopped: "${scheduler.name}" (${scheduler._id})`);
+		console.log(`Schedule disabled: "${scheduler.name}" (${scheduler._id})`);
 		return { ok: true, stopped: true, scheduler: formatScheduler(scheduler) };
-	}
-
-	async function runNow(schedulerId) {
-		const scheduler = await loadScheduler(schedulerId);
-		if (!scheduler) {
-			return { ok: false, reason: "scheduler_not_found" };
-		}
-		return dispatchScheduler(scheduler);
 	}
 
 	function formatScheduler(scheduler) {
@@ -146,9 +145,9 @@ module.exports = async function ({ config, Services }) {
 			groupId: scheduler.group?._id || scheduler.group,
 			groupName: scheduler.group?.name,
 			chatId: scheduler.group?.chatId,
-			photoIds: (scheduler.photos || []).map((p) => p._id || p),
 			cron: scheduler.cron,
 			timezone: scheduler.timezone,
+			caption: scheduler.caption,
 			isRunning: scheduler.isRunning,
 			isActive: scheduler.isActive,
 		};
@@ -157,17 +156,15 @@ module.exports = async function ({ config, Services }) {
 	async function getStatus() {
 		const schedulers = await PhotoScheduler.find()
 			.populate("group", "name chatId isActive")
-			.populate("photos", "title isActive")
 			.sort({ createdAt: 1 });
 
 		return {
 			globalEnabled: config.scheduler.enabled !== false,
 			defaultCron: config.scheduler.cron,
 			defaultTimezone: config.scheduler.timezone,
-			schedulers: schedulers.map((s) => ({
-				...formatScheduler(s),
-				cronRegistered: cronTasks.has(String(s._id)),
-			})),
+			dispatchMode: "frontend_screenshot",
+			hint: "Frontend captures screenshots on each schedule cron interval and POSTs to /screenshots/dispatch",
+			schedulers: schedulers.map((s) => formatScheduler(s)),
 		};
 	}
 
@@ -197,10 +194,9 @@ module.exports = async function ({ config, Services }) {
 		}
 
 		const activated = results.filter((r) => r.started || r.alreadyRunning).length;
-		const failed = results.length - activated;
 
 		console.log(
-			`Group activate-all: ${found.group.name} (${groupId}) — ${activated}/${results.length} activated`
+			`Group activate-all: ${found.group.name} (${groupId}) — ${activated}/${results.length} enabled`
 		);
 
 		return {
@@ -209,7 +205,7 @@ module.exports = async function ({ config, Services }) {
 			groupName: found.group.name,
 			total: results.length,
 			activated,
-			failed,
+			failed: results.length - activated,
 			results,
 		};
 	}
@@ -230,10 +226,10 @@ module.exports = async function ({ config, Services }) {
 			});
 		}
 
-		const deactivated = results.filter((r) => r.stopped || r.alreadyStopped).length;
+		const deactivated = results.filter((r) => r.stopped).length;
 
 		console.log(
-			`Group deactivate-all: ${found.group.name} (${groupId}) — ${deactivated}/${results.length} deactivated`
+			`Group deactivate-all: ${found.group.name} (${groupId}) — ${deactivated}/${results.length} disabled`
 		);
 
 		return {
@@ -270,15 +266,11 @@ module.exports = async function ({ config, Services }) {
 		}
 
 		const schedules = await PhotoScheduler.find(filter).select("_id name group");
-		for (const schedule of schedules) {
-			unregisterCronTask(schedule._id);
-		}
-
 		const deleteResult = await PhotoScheduler.deleteMany({
 			_id: { $in: schedules.map((s) => s._id) },
 		});
 
-		console.log(`Deleted ${deleteResult.deletedCount} photo dispatch schedule(s)`);
+		console.log(`Deleted ${deleteResult.deletedCount} screenshot dispatch schedule(s)`);
 
 		return {
 			ok: true,
@@ -292,21 +284,10 @@ module.exports = async function ({ config, Services }) {
 	}
 
 	async function restoreRunningSchedulers() {
-		if (config.scheduler.enabled === false) {
-			console.log("Scheduler engine disabled (SCHEDULER_ENABLED=false)");
-			return;
-		}
-
-		const running = await PhotoScheduler.find({ isRunning: true, isActive: true });
-		for (const scheduler of running) {
-			try {
-				await startScheduler(scheduler._id);
-			} catch (err) {
-				logger.error(`Failed to restore scheduler ${scheduler._id}: ${err.message}`);
-				await PhotoScheduler.findByIdAndUpdate(scheduler._id, { isRunning: false });
-			}
-		}
-		console.log(`Restored ${running.length} running scheduler(s)`);
+		const running = await PhotoScheduler.countDocuments({ isRunning: true, isActive: true });
+		console.log(
+			`${running} enabled screenshot schedule(s) — waiting for frontend POST /screenshots/dispatch`
+		);
 	}
 
 	await restoreRunningSchedulers();
@@ -315,7 +296,7 @@ module.exports = async function ({ config, Services }) {
 		getStatus,
 		startScheduler,
 		stopScheduler,
-		runNow,
+		dispatchScreenshot,
 		activateSchedulesForGroup,
 		deactivateSchedulesForGroup,
 		deleteSchedules,

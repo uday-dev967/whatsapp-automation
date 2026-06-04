@@ -1,6 +1,10 @@
-# WhatsApp Photo Automation — API Reference
+# WhatsApp Screenshot Automation — API Reference
+
+> **Screenshot-based dispatch:** Images come from the **frontend** (`POST /screenshots/dispatch`), not from a MongoDB photo library. See **[SCREENSHOT.md](./SCREENSHOT.md)** for the full frontend integration guide.
 
 All automation endpoints live under the **Automation** controller with API version **v1.0**.
+
+**Path rename:** `photo-dispatch-schedules` → `screenshot-dispatch-schedules`. `photo-library` removed.
 
 ## Base URL
 

@@ -1,5 +1,5 @@
 {
-	"watch": ["app.js", "config", "controllers", "middlewares", "models", "services", "utils"],
+	"watch": ["app.js", "config", "controllers", "middlewares", "models", "services", "utils", "wa"],
 	"ext": "js,json",
 	"ignore": [
 		"_IGNORE_*/**",

@@ -13,12 +13,6 @@ const whatsAppGroupSchema = new mongoose.Schema(
 			unique: true,
 			trim: true,
 		},
-		photos: [
-			{
-				type: mongoose.Schema.Types.ObjectId,
-				ref: "Photo",
-			},
-		],
 		isActive: {
 			type: Boolean,
 			default: true,

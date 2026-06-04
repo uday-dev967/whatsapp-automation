@@ -6,7 +6,7 @@ let bodyParser = require("body-parser").json({ limit: "50mb" });
 let compression = require("compression");
 let cors = require("cors");
 /* This whitelist can only filter requests from the browser clients */
-var whitelist = ["http://localhost:3000"];
+var whitelist = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"];
 
 var corsOptions = {
 	origin: function (origin, callback) {

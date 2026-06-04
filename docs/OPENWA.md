@@ -179,7 +179,7 @@ Relevant code paths:
 |------|------|
 | Cron fires | `services/Scheduler.js` → `dispatchScheduler()` |
 | Send image | `services/Whatsapp.js` → `sendImageFromUrl()` |
-| Download image | `utils/imageUrl.js` → `urlToDataUrl()` |
+| Screenshot bytes → data URL | `utils/screenshotPayload.js` → `bufferToDataUrl()` |
 | List groups | `utils/whatsappGroups.js` → `fetchWhatsAppGroups(client)` |
 | HTTP routes | `controllers/Automation.js` |
 
@@ -195,7 +195,7 @@ Relevant code paths:
 | `config/conf.js` | `serverUrl`, `apiKey`, `sessionId` for the API process |
 | `utils/chromePath.js` | Resolve Chrome executable on Windows |
 | `utils/whatsappUserAgent.js` | Set Puppeteer user-agent before OpenWA starts |
-| `utils/imageUrl.js` | Convert photo URL to data URL for `sendImage` |
+| `utils/screenshotPayload.js` | Parse upload / convert buffer for `sendImage` |
 | `utils/whatsappGroups.js` | `getAllGroups` + fallback for listing `@g.us` chats |
 | `patches/@open-wa+wa-automate+4.76.0.patch` | UA fix applied on `npm install` |
 | `scripts/cleanWaSession.js` | `npm run wa:clean` — delete session to force new QR |

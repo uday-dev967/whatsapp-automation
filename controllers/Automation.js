@@ -1,13 +1,13 @@
 const mongoose = require("mongoose");
-const Photo = require("../models/Photo");
 const PhotoScheduler = require("../models/PhotoScheduler");
 const WhatsAppGroup = require("../models/WhatsAppGroup");
 const { logger } = require("../utils");
 const { parseScheduleId, scheduleNotFoundResponse } = require("../utils/parseScheduleId");
 const { parseGroupId, validateScheduleIdList } = require("../utils/parseGroupId");
+const { screenshotFromRequest } = require("../utils/screenshotPayload");
 
 async function listRegisteredGroups(req, res) {
-	const groups = await WhatsAppGroup.find().populate("photos").sort({ createdAt: 1 });
+	const groups = await WhatsAppGroup.find().sort({ createdAt: 1 });
 	const groupIds = groups.map((g) => g._id);
 
 	const scheduleStats = await PhotoScheduler.aggregate([
@@ -53,18 +53,6 @@ async function listRegisteredGroups(req, res) {
 
 module.exports.routes = function ({ Services, config }) {
 	return {
-		"GET /photo-library": {
-			handler: async function (req, res) {
-				try {
-					const photos = await Photo.find().sort({ createdAt: 1 });
-					res.json({ ok: true, photos });
-				} catch (e) {
-					logger.error(e);
-					res.status(500).json({ ok: false, message: e.message });
-				}
-			},
-		},
-
 		"GET /registered-groups": {
 			handler: async function (req, res) {
 				try {
@@ -132,30 +120,18 @@ module.exports.routes = function ({ Services, config }) {
 		"POST /target-groups": {
 			handler: async function (req, res) {
 				try {
-					const { name, chatId, photoIds = [], isActive = true } = req.body;
+					const { name, chatId, isActive = true } = req.body;
 					if (!name || !chatId) {
 						return res.status(400).json({ ok: false, message: "name and chatId are required" });
-					}
-
-					if (photoIds.length) {
-						const found = await Photo.countDocuments({ _id: { $in: photoIds } });
-						if (found !== photoIds.length) {
-							return res.status(400).json({
-								ok: false,
-								message: "One or more photoIds do not exist in the photo library",
-							});
-						}
 					}
 
 					const group = await WhatsAppGroup.create({
 						name,
 						chatId,
-						photos: photoIds,
 						isActive,
 					});
 
-					const populated = await WhatsAppGroup.findById(group._id).populate("photos");
-					res.status(201).json({ ok: true, group: populated });
+					res.status(201).json({ ok: true, group });
 				} catch (e) {
 					logger.error(e);
 					res.status(500).json({ ok: false, message: e.message });
@@ -201,7 +177,59 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"GET /photo-dispatch-schedules": {
+		"POST /screenshots/dispatch": {
+			localMiddlewares: ["screenshotUpload"],
+			handler: async function (req, res) {
+				try {
+					const image = screenshotFromRequest(req);
+					if (!image) {
+						return res.status(400).json({
+							ok: false,
+							message:
+								"Screenshot required: multipart field 'image' or JSON body 'imageBase64' (+ optional mimeType)",
+						});
+					}
+
+					const { scheduleId, groupId, caption } = req.body || {};
+
+					if (scheduleId) {
+						const parsed = parseScheduleId(scheduleId);
+						if (!parsed.ok) {
+							return res.status(parsed.status).json(parsed.body);
+						}
+					}
+					if (groupId) {
+						const parsed = parseGroupId(groupId);
+						if (!parsed.ok) {
+							return res.status(parsed.status).json(parsed.body);
+						}
+					}
+
+					const result = await Services.Scheduler.dispatchScreenshot(image, {
+						scheduleId: scheduleId ? String(scheduleId).trim() : undefined,
+						groupId: groupId ? String(groupId).trim() : undefined,
+						caption,
+					});
+
+					if (!result.ok) {
+						const status =
+							result.reason === "scheduler_not_found" || result.reason === "group_not_found"
+								? 404
+								: result.reason === "whatsapp_not_ready"
+									? 503
+									: 400;
+						return res.status(status).json({ ok: false, result });
+					}
+
+					res.json({ ok: true, result });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"GET /screenshot-dispatch-schedules": {
 			handler: async function (req, res) {
 				try {
 					const filter = {};
@@ -214,10 +242,12 @@ module.exports.routes = function ({ Services, config }) {
 						}
 						filter.group = req.query.groupId;
 					}
+					if (req.query.running === "true") {
+						filter.isRunning = true;
+					}
 
 					const schedules = await PhotoScheduler.find(filter)
 						.populate("group", "name chatId isActive")
-						.populate("photos", "title url isActive")
 						.sort({ createdAt: 1 });
 					res.json({ ok: true, count: schedules.length, schedules });
 				} catch (e) {
@@ -227,7 +257,7 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"GET /photo-dispatch-schedules/status": {
+		"GET /screenshot-dispatch-schedules/status": {
 			handler: async function (req, res) {
 				try {
 					const status = await Services.Scheduler.getStatus();
@@ -239,7 +269,7 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"GET /photo-dispatch-schedules/:scheduleId": {
+		"GET /screenshot-dispatch-schedules/:scheduleId": {
 			handler: async function (req, res) {
 				try {
 					const parsed = parseScheduleId(req.params.scheduleId);
@@ -247,9 +277,10 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(parsed.status).json(parsed.body);
 					}
 
-					const schedule = await PhotoScheduler.findById(parsed.scheduleId)
-						.populate("group", "name chatId isActive")
-						.populate("photos", "title url isActive");
+					const schedule = await PhotoScheduler.findById(parsed.scheduleId).populate(
+						"group",
+						"name chatId isActive"
+					);
 					if (!schedule) {
 						const notFound = scheduleNotFoundResponse(parsed.scheduleId);
 						return res.status(notFound.status).json(notFound.body);
@@ -262,7 +293,7 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"DELETE /photo-dispatch-schedules": {
+		"DELETE /screenshot-dispatch-schedules": {
 			handler: async function (req, res) {
 				try {
 					const { scheduleIds, groupId } = req.body || {};
@@ -302,15 +333,15 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"POST /photo-dispatch-schedules": {
+		"POST /screenshot-dispatch-schedules": {
 			handler: async function (req, res) {
 				try {
 					const {
 						name,
 						groupId,
-						photoIds = [],
 						cron = config.scheduler.cron,
 						timezone = config.scheduler.timezone,
+						caption = "",
 						start = false,
 						isActive = true,
 					} = req.body;
@@ -321,32 +352,18 @@ module.exports.routes = function ({ Services, config }) {
 							message: "name and groupId are required",
 						});
 					}
-					if (!photoIds.length) {
-						return res.status(400).json({
-							ok: false,
-							message: "photoIds must include at least one photo from the photo library",
-						});
-					}
 
 					const group = await WhatsAppGroup.findById(groupId);
 					if (!group) {
 						return res.status(404).json({ ok: false, message: "Target group not found" });
 					}
 
-					const foundPhotos = await Photo.countDocuments({ _id: { $in: photoIds } });
-					if (foundPhotos !== photoIds.length) {
-						return res.status(400).json({
-							ok: false,
-							message: "One or more photoIds do not exist in the photo library",
-						});
-					}
-
 					const schedule = await PhotoScheduler.create({
 						name,
 						group: groupId,
-						photos: photoIds,
 						cron,
 						timezone,
+						caption,
 						isActive,
 						isRunning: false,
 					});
@@ -356,9 +373,10 @@ module.exports.routes = function ({ Services, config }) {
 						activateResult = await Services.Scheduler.startScheduler(schedule._id);
 					}
 
-					const populated = await PhotoScheduler.findById(schedule._id)
-						.populate("group", "name chatId isActive")
-						.populate("photos", "title url isActive");
+					const populated = await PhotoScheduler.findById(schedule._id).populate(
+						"group",
+						"name chatId isActive"
+					);
 
 					res.status(201).json({ ok: true, schedule: populated, activateResult });
 				} catch (e) {
@@ -368,10 +386,15 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"POST /photo-dispatch-schedules/:scheduleId/activate": {
+		"POST /screenshot-dispatch-schedules/:scheduleId/activate": {
 			handler: async function (req, res) {
 				try {
-					const result = await Services.Scheduler.startScheduler(req.params.scheduleId);
+					const parsed = parseScheduleId(req.params.scheduleId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const result = await Services.Scheduler.startScheduler(parsed.scheduleId);
 					if (!result.ok) {
 						const status = result.reason === "scheduler_not_found" ? 404 : 400;
 						return res.status(status).json({ ok: false, ...result });
@@ -384,28 +407,17 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"POST /photo-dispatch-schedules/:scheduleId/deactivate": {
+		"POST /screenshot-dispatch-schedules/:scheduleId/deactivate": {
 			handler: async function (req, res) {
 				try {
-					const result = await Services.Scheduler.stopScheduler(req.params.scheduleId);
+					const parsed = parseScheduleId(req.params.scheduleId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const result = await Services.Scheduler.stopScheduler(parsed.scheduleId);
 					if (!result.ok) {
 						return res.status(404).json({ ok: false, ...result });
-					}
-					res.json({ ok: true, result });
-				} catch (e) {
-					logger.error(e);
-					res.status(500).json({ ok: false, message: e.message });
-				}
-			},
-		},
-
-		"POST /photo-dispatch-schedules/:scheduleId/dispatch-now": {
-			handler: async function (req, res) {
-				try {
-					const result = await Services.Scheduler.runNow(req.params.scheduleId);
-					if (!result.ok) {
-						const status = result.reason === "scheduler_not_found" ? 404 : 503;
-						return res.status(status).json({ ok: false, result });
 					}
 					res.json({ ok: true, result });
 				} catch (e) {

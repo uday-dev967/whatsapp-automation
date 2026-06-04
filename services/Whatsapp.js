@@ -1,13 +1,13 @@
 const { SocketClient } = require("@open-wa/wa-automate");
 const { logger } = require("../utils");
-const { urlToDataUrl, filenameFromUrl } = require("../utils/imageUrl");
+const { bufferToDataUrl } = require("../utils/screenshotPayload");
 const { fetchWhatsAppGroups } = require("../utils/whatsappGroups");
 
 const disabledService = {
 	isReady: () => false,
 	getClient: () => null,
 	listGroups: async () => [],
-	sendImageFromUrl: async () => {
+	sendImageBuffer: async () => {
 		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
 	},
 };
@@ -69,12 +69,17 @@ module.exports = async function ({ config }) {
 			if (!client) return [];
 			return fetchWhatsAppGroups(client);
 		},
-		sendImageFromUrl: async (chatId, imageUrl, caption = "") => {
+		sendImageBuffer: async (
+			chatId,
+			buffer,
+			mimetype = "image/png",
+			caption = "",
+			filename = "screenshot.png"
+		) => {
 			if (!client) {
 				throw new Error("WhatsApp client is not connected");
 			}
-			const dataUrl = await urlToDataUrl(imageUrl);
-			const filename = filenameFromUrl(imageUrl);
+			const dataUrl = bufferToDataUrl(buffer, mimetype);
 			return client.sendImage(chatId, dataUrl, filename, caption);
 		},
 	};
