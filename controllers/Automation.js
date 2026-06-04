@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const PhotoScheduler = require("../models/PhotoScheduler");
 const WhatsAppGroup = require("../models/WhatsAppGroup");
+const SendLog = require("../models/SendLog");
 const { logger } = require("../utils");
 const { parseScheduleId, scheduleNotFoundResponse } = require("../utils/parseScheduleId");
 const { parseGroupId, validateScheduleIdList } = require("../utils/parseGroupId");
@@ -75,6 +76,104 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
+		"POST /target-groups": {
+			handler: async function (req, res) {
+				try {
+					const {
+						name,
+						chatId,
+						isActive = true,
+						state = "",
+						region = "",
+						manager = "",
+						reportTypes = ["Productivity Report"],
+					} = req.body;
+
+					if (!name || !chatId) {
+						return res.status(400).json({ ok: false, message: "name and chatId are required" });
+					}
+
+					const group = await WhatsAppGroup.create({
+						name,
+						chatId,
+						isActive,
+						state,
+						region,
+						manager,
+						reportTypes,
+					});
+
+					res.status(201).json({ ok: true, group });
+				} catch (e) {
+					logger.error(e);
+					if (e.code === 11000) {
+						return res.status(409).json({ ok: false, message: "A group with this chatId already exists" });
+					}
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"PUT /target-groups/:groupId": {
+			handler: async function (req, res) {
+				try {
+					const parsed = parseGroupId(req.params.groupId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const { name, chatId, isActive, state, region, manager, reportTypes } = req.body;
+					const updates = {};
+					if (name !== undefined) updates.name = name;
+					if (chatId !== undefined) updates.chatId = chatId;
+					if (isActive !== undefined) updates.isActive = isActive;
+					if (state !== undefined) updates.state = state;
+					if (region !== undefined) updates.region = region;
+					if (manager !== undefined) updates.manager = manager;
+					if (reportTypes !== undefined) updates.reportTypes = reportTypes;
+
+					const group = await WhatsAppGroup.findByIdAndUpdate(
+						parsed.groupId,
+						{ $set: updates },
+						{ new: true, runValidators: true }
+					);
+
+					if (!group) {
+						return res.status(404).json({ ok: false, message: "Group not found" });
+					}
+
+					res.json({ ok: true, group });
+				} catch (e) {
+					logger.error(e);
+					if (e.code === 11000) {
+						return res.status(409).json({ ok: false, message: "A group with this chatId already exists" });
+					}
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"DELETE /target-groups/:groupId": {
+			handler: async function (req, res) {
+				try {
+					const parsed = parseGroupId(req.params.groupId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const group = await WhatsAppGroup.findByIdAndDelete(parsed.groupId);
+					if (!group) {
+						return res.status(404).json({ ok: false, message: "Group not found" });
+					}
+
+					res.json({ ok: true, message: "Group deleted", group });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
 		"POST /target-groups/:groupId/activate-schedules": {
 			handler: async function (req, res) {
 				try {
@@ -117,28 +216,6 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"POST /target-groups": {
-			handler: async function (req, res) {
-				try {
-					const { name, chatId, isActive = true } = req.body;
-					if (!name || !chatId) {
-						return res.status(400).json({ ok: false, message: "name and chatId are required" });
-					}
-
-					const group = await WhatsAppGroup.create({
-						name,
-						chatId,
-						isActive,
-					});
-
-					res.status(201).json({ ok: true, group });
-				} catch (e) {
-					logger.error(e);
-					res.status(500).json({ ok: false, message: e.message });
-				}
-			},
-		},
-
 		"GET /whatsapp/connection-status": {
 			handler: async function (req, res) {
 				const ready = Services.Whatsapp.isReady();
@@ -167,7 +244,7 @@ module.exports.routes = function ({ Services, config }) {
 						groups,
 						hint:
 							groups.length === 0
-								? "Open WhatsApp Web in the wa:server Chrome window and click each group once to load chats, then call this again. Or register a target with POST /target-groups using chatId from a group invite link."
+								? "Open WhatsApp Web in the wa:server Chrome window and click each group once to load chats, then call this again."
 								: undefined,
 					});
 				} catch (e) {
@@ -218,8 +295,25 @@ module.exports.routes = function ({ Services, config }) {
 								: result.reason === "whatsapp_not_ready"
 									? 503
 									: 400;
+						SendLog.create({
+							scheduleName: "Manual dispatch",
+							groupCount: 0,
+							status: "failed",
+							errorMessage: result.reason || "dispatch_failed",
+							sentAt: new Date(),
+						}).catch((e) => logger.error("SendLog write failed:", e));
 						return res.status(status).json({ ok: false, result });
 					}
+
+					const firstResult = result.results?.[0];
+					SendLog.create({
+						scheduleId: firstResult?.scheduleId || undefined,
+						scheduleName: firstResult?.scheduleName || "Manual dispatch",
+						groupIds: (result.results || []).map((r) => r.groupId),
+						groupCount: result.sent || 0,
+						status: "success",
+						sentAt: new Date(),
+					}).catch((e) => logger.error("SendLog write failed:", e));
 
 					res.json({ ok: true, result });
 				} catch (e) {
@@ -248,6 +342,7 @@ module.exports.routes = function ({ Services, config }) {
 
 					const schedules = await PhotoScheduler.find(filter)
 						.populate("group", "name chatId isActive")
+						.populate("groups", "name chatId isActive")
 						.sort({ createdAt: 1 });
 					res.json({ ok: true, count: schedules.length, schedules });
 				} catch (e) {
@@ -277,10 +372,9 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(parsed.status).json(parsed.body);
 					}
 
-					const schedule = await PhotoScheduler.findById(parsed.scheduleId).populate(
-						"group",
-						"name chatId isActive"
-					);
+					const schedule = await PhotoScheduler.findById(parsed.scheduleId)
+						.populate("group", "name chatId isActive")
+						.populate("groups", "name chatId isActive");
 					if (!schedule) {
 						const notFound = scheduleNotFoundResponse(parsed.scheduleId);
 						return res.status(notFound.status).json(notFound.body);
@@ -339,6 +433,7 @@ module.exports.routes = function ({ Services, config }) {
 					const {
 						name,
 						groupId,
+						groupIds,
 						cron = config.scheduler.cron,
 						timezone = config.scheduler.timezone,
 						caption = "",
@@ -346,21 +441,28 @@ module.exports.routes = function ({ Services, config }) {
 						isActive = true,
 					} = req.body;
 
-					if (!name || !groupId) {
+					let primaryGroupId = groupId;
+					const allGroupIds = Array.isArray(groupIds) ? groupIds : [];
+					if (!primaryGroupId && allGroupIds.length > 0) {
+						primaryGroupId = allGroupIds[0];
+					}
+
+					if (!name || !primaryGroupId) {
 						return res.status(400).json({
 							ok: false,
-							message: "name and groupId are required",
+							message: "name and at least one group (groupId or groupIds[0]) are required",
 						});
 					}
 
-					const group = await WhatsAppGroup.findById(groupId);
+					const group = await WhatsAppGroup.findById(primaryGroupId);
 					if (!group) {
 						return res.status(404).json({ ok: false, message: "Target group not found" });
 					}
 
 					const schedule = await PhotoScheduler.create({
 						name,
-						group: groupId,
+						group: primaryGroupId,
+						groups: allGroupIds,
 						cron,
 						timezone,
 						caption,
@@ -373,12 +475,63 @@ module.exports.routes = function ({ Services, config }) {
 						activateResult = await Services.Scheduler.startScheduler(schedule._id);
 					}
 
-					const populated = await PhotoScheduler.findById(schedule._id).populate(
-						"group",
-						"name chatId isActive"
-					);
+					const populated = await PhotoScheduler.findById(schedule._id)
+						.populate("group", "name chatId isActive")
+						.populate("groups", "name chatId isActive");
 
 					res.status(201).json({ ok: true, schedule: populated, activateResult });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"PUT /screenshot-dispatch-schedules/:scheduleId": {
+			handler: async function (req, res) {
+				try {
+					const parsed = parseScheduleId(req.params.scheduleId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const { name, groupId, groupIds, cron, timezone, caption, isActive } = req.body;
+					const updates = {};
+					if (name !== undefined) updates.name = name;
+					if (cron !== undefined) updates.cron = cron;
+					if (timezone !== undefined) updates.timezone = timezone;
+					if (caption !== undefined) updates.caption = caption;
+					if (isActive !== undefined) updates.isActive = isActive;
+
+					if (groupId !== undefined) {
+						const g = await WhatsAppGroup.findById(groupId);
+						if (!g) {
+							return res.status(404).json({ ok: false, message: "Target group not found" });
+						}
+						updates.group = groupId;
+					}
+
+					if (groupIds !== undefined) {
+						updates.groups = groupIds;
+						if (!updates.group && groupIds.length > 0) {
+							updates.group = groupIds[0];
+						}
+					}
+
+					const schedule = await PhotoScheduler.findByIdAndUpdate(
+						parsed.scheduleId,
+						{ $set: updates },
+						{ new: true, runValidators: true }
+					)
+						.populate("group", "name chatId isActive")
+						.populate("groups", "name chatId isActive");
+
+					if (!schedule) {
+						const notFound = scheduleNotFoundResponse(parsed.scheduleId);
+						return res.status(notFound.status).json(notFound.body);
+					}
+
+					res.json({ ok: true, schedule });
 				} catch (e) {
 					logger.error(e);
 					res.status(500).json({ ok: false, message: e.message });
@@ -420,6 +573,19 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(404).json({ ok: false, ...result });
 					}
 					res.json({ ok: true, result });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"GET /send-logs": {
+			handler: async function (req, res) {
+				try {
+					const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+					const logs = await SendLog.find().sort({ sentAt: -1 }).limit(limit);
+					res.json({ ok: true, count: logs.length, logs });
 				} catch (e) {
 					logger.error(e);
 					res.status(500).json({ ok: false, message: e.message });

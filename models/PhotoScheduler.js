@@ -12,6 +12,12 @@ const screenshotDispatchScheduleSchema = new mongoose.Schema(
 			ref: "WhatsAppGroup",
 			required: true,
 		},
+		groups: [
+			{
+				type: mongoose.Schema.Types.ObjectId,
+				ref: "WhatsAppGroup",
+			},
+		],
 		cron: {
 			type: String,
 			required: true,

@@ -17,6 +17,25 @@ const whatsAppGroupSchema = new mongoose.Schema(
 			type: Boolean,
 			default: true,
 		},
+		state: {
+			type: String,
+			trim: true,
+			default: "",
+		},
+		region: {
+			type: String,
+			trim: true,
+			default: "",
+		},
+		manager: {
+			type: String,
+			trim: true,
+			default: "",
+		},
+		reportTypes: {
+			type: [String],
+			default: ["Productivity Report"],
+		},
 	},
 	{ timestamps: true }
 );
