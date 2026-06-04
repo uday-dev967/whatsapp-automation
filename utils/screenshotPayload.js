@@ -9,12 +9,28 @@ function parseDataUrl(dataUrl) {
 	};
 }
 
+function validateImageBuffer(buffer, mimetype = "image/png") {
+	if (!buffer?.length || buffer.length < 50) {
+		return false;
+	}
+	if (mimetype === "image/png" && buffer[0] === 0x89 && buffer[1] === 0x50) {
+		return true;
+	}
+	if (mimetype === "image/jpeg" && buffer[0] === 0xff && buffer[1] === 0xd8) {
+		return true;
+	}
+	return buffer.length >= 100;
+}
+
 function screenshotFromRequest(req) {
 	if (req.file?.buffer) {
+		const mime = req.file.mimetype || "image/png";
 		return {
 			buffer: req.file.buffer,
-			mimetype: req.file.mimetype || "image/png",
-			filename: req.file.originalname || "screenshot.png",
+			mimetype: mime,
+			filename:
+				req.file.originalname ||
+				(mime === "image/jpeg" ? "screenshot.jpg" : "screenshot.png"),
 		};
 	}
 
@@ -29,10 +45,11 @@ function screenshotFromRequest(req) {
 			};
 		}
 		if (typeof imageBase64 === "string") {
+			const mime = mimeType || "image/png";
 			return {
 				buffer: Buffer.from(imageBase64, "base64"),
-				mimetype: mimeType,
-				filename: "screenshot.png",
+				mimetype: mime,
+				filename: mime === "image/jpeg" ? "screenshot.jpg" : "screenshot.png",
 			};
 		}
 	}
@@ -40,9 +57,23 @@ function screenshotFromRequest(req) {
 	return null;
 }
 
+function assertValidScreenshot(image) {
+	if (!image?.buffer?.length) {
+		return { ok: false, reason: "missing_screenshot" };
+	}
+	if (image.buffer.length > 12 * 1024 * 1024) {
+		return { ok: false, reason: "screenshot_too_large" };
+	}
+	if (!validateImageBuffer(image.buffer, image.mimetype)) {
+		return { ok: false, reason: "invalid_screenshot" };
+	}
+	return { ok: true };
+}
+
 module.exports = {
 	screenshotFromRequest,
 	bufferToDataUrl,
+	assertValidScreenshot,
 };
 
 function bufferToDataUrl(buffer, mimetype = "image/png") {

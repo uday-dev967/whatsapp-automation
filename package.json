@@ -9,6 +9,7 @@
 		"start": "nodemon app",
 		"wa:server": "node wa/startServer.js dev",
 		"wa:clean": "node scripts/cleanWaSession.js",
+		"test:dispatch": "node scripts/test-dispatch.js dev",
 		"postinstall": "patch-package"
 	},
 	"repository": {
@@ -27,7 +28,8 @@
 		"mongoose": "^9.6.3",
 		"multer": "^1.4.5-lts.1",
 		"node-cron": "^4.2.1",
-		"nodemon": "^3.1.14"
+		"nodemon": "^3.1.14",
+		"socket.io": "^4.8.3"
 	},
 	"devDependencies": {
 		"patch-package": "^8.0.1"

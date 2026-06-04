@@ -5,7 +5,7 @@ const SendLog = require("../models/SendLog");
 const { logger } = require("../utils");
 const { parseScheduleId, scheduleNotFoundResponse } = require("../utils/parseScheduleId");
 const { parseGroupId, validateScheduleIdList } = require("../utils/parseGroupId");
-const { screenshotFromRequest } = require("../utils/screenshotPayload");
+const { screenshotFromRequest, assertValidScreenshot } = require("../utils/screenshotPayload");
 
 async function listRegisteredGroups(req, res) {
 	const groups = await WhatsAppGroup.find().sort({ createdAt: 1 });
@@ -254,20 +254,72 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
+		"GET /whatsapp/contacts": {
+			handler: async function (req, res) {
+				try {
+					if (!Services.Whatsapp.isReady()) {
+						return res.status(503).json({ ok: false, message: "WhatsApp client is not ready" });
+					}
+					const q = req.query.q != null ? String(req.query.q) : "";
+					const contacts = await Services.Whatsapp.listContacts(q);
+					res.json({ ok: true, count: contacts.length, contacts });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"POST /whatsapp/groups": {
+			handler: async function (req, res) {
+				try {
+					if (!Services.Whatsapp.isReady()) {
+						return res.status(503).json({ ok: false, message: "WhatsApp client is not ready" });
+					}
+					const { name, participantIds } = req.body || {};
+					if (!name || !Array.isArray(participantIds) || !participantIds.length) {
+						return res.status(400).json({
+							ok: false,
+							message: "name and a non-empty participantIds array are required",
+						});
+					}
+					const created = await Services.Whatsapp.createWAGroup(name, participantIds);
+					res.status(201).json({
+						ok: true,
+						chatId: created.chatId,
+						name: created.name,
+						participantCount: created.participantCount,
+					});
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
 		"POST /screenshots/dispatch": {
-			localMiddlewares: ["screenshotUpload"],
 			handler: async function (req, res) {
 				try {
 					const image = screenshotFromRequest(req);
-					if (!image) {
+					const imageCheck = image
+						? assertValidScreenshot(image)
+						: { ok: false, reason: "missing_screenshot" };
+					if (!imageCheck.ok) {
+						const { messageForReason } = require("../utils/dispatchMessages");
+						const reason = imageCheck.reason || "missing_screenshot";
 						return res.status(400).json({
 							ok: false,
-							message:
-								"Screenshot required: multipart field 'image' or JSON body 'imageBase64' (+ optional mimeType)",
+							message: messageForReason(reason) || reason,
+							result: { reason },
 						});
 					}
 
-					const { scheduleId, groupId, caption } = req.body || {};
+					const { scheduleId, groupId, caption, manual } = req.body || {};
+					const isManual =
+						manual === true ||
+						manual === "true" ||
+						manual === 1 ||
+						manual === "1";
 
 					if (scheduleId) {
 						const parsed = parseScheduleId(scheduleId);
@@ -282,10 +334,17 @@ module.exports.routes = function ({ Services, config }) {
 						}
 					}
 
+					const { messageForReason } = require("../utils/dispatchMessages");
+
+					logger.info(
+						`POST /screenshots/dispatch — ${image.buffer.length} bytes, manual=${isManual}, scheduleId=${scheduleId || "(none)"}, waReady=${Services.Whatsapp.isReady()}`
+					);
+
 					const result = await Services.Scheduler.dispatchScreenshot(image, {
 						scheduleId: scheduleId ? String(scheduleId).trim() : undefined,
 						groupId: groupId ? String(groupId).trim() : undefined,
 						caption,
+						manual: isManual,
 					});
 
 					if (!result.ok) {
@@ -295,14 +354,15 @@ module.exports.routes = function ({ Services, config }) {
 								: result.reason === "whatsapp_not_ready"
 									? 503
 									: 400;
+						const message = messageForReason(result.reason);
 						SendLog.create({
-							scheduleName: "Manual dispatch",
+							scheduleName: isManual ? "Manual dispatch" : "Scheduled dispatch",
 							groupCount: 0,
 							status: "failed",
-							errorMessage: result.reason || "dispatch_failed",
+							errorMessage: message,
 							sentAt: new Date(),
 						}).catch((e) => logger.error("SendLog write failed:", e));
-						return res.status(status).json({ ok: false, result });
+						return res.status(status).json({ ok: false, message, result });
 					}
 
 					const firstResult = result.results?.[0];
@@ -315,9 +375,12 @@ module.exports.routes = function ({ Services, config }) {
 						sentAt: new Date(),
 					}).catch((e) => logger.error("SendLog write failed:", e));
 
+					logger.info(
+						`Dispatch complete — sent=${result.sent}, targets=${(result.results || []).length}`
+					);
 					res.json({ ok: true, result });
 				} catch (e) {
-					logger.error(e);
+					logger.error("POST /screenshots/dispatch failed:", e);
 					res.status(500).json({ ok: false, message: e.message });
 				}
 			},
@@ -531,7 +594,42 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(notFound.status).json(notFound.body);
 					}
 
+					if (
+						schedule.isRunning &&
+						Services.ScreenshotCron?.refresh &&
+						(cron !== undefined || timezone !== undefined)
+					) {
+						await Services.ScreenshotCron.refresh();
+					}
+
 					res.json({ ok: true, schedule });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"POST /screenshot-dispatch-schedules/:scheduleId/dispatch-now": {
+			handler: async function (req, res) {
+				try {
+					const parsed = parseScheduleId(req.params.scheduleId);
+					if (!parsed.ok) {
+						return res.status(parsed.status).json(parsed.body);
+					}
+
+					const result = await Services.ScreenshotCron.triggerNow(parsed.scheduleId);
+					if (!result.ok) {
+						const status = result.reason === "scheduler_not_found" ? 404 : 400;
+						return res.status(status).json({ ok: false, ...result });
+					}
+
+					res.json({
+						ok: true,
+						message:
+							"Capture requested via Socket.IO — ensure ReportFlow UI is open, then it will POST /screenshots/dispatch",
+						result,
+					});
 				} catch (e) {
 					logger.error(e);
 					res.status(500).json({ ok: false, message: e.message });

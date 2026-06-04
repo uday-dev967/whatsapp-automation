@@ -1,12 +1,24 @@
 const { SocketClient } = require("@open-wa/wa-automate");
 const { logger } = require("../utils");
 const { bufferToDataUrl } = require("../utils/screenshotPayload");
+const { normalizeDispatchChatId } = require("../utils/normalizeChatId");
+const { withTimeout } = require("../utils/withTimeout");
+
+const SEND_IMAGE_TIMEOUT_MS = 120_000;
 const { fetchWhatsAppGroups } = require("../utils/whatsappGroups");
+const {
+	fetchWhatsAppContacts,
+	extractGroupChatIdFromCreateResult,
+} = require("../utils/whatsappContacts");
 
 const disabledService = {
 	isReady: () => false,
 	getClient: () => null,
 	listGroups: async () => [],
+	listContacts: async () => [],
+	createWAGroup: async () => {
+		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
+	},
 	sendImageBuffer: async () => {
 		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
 	},
@@ -69,6 +81,36 @@ module.exports = async function ({ config }) {
 			if (!client) return [];
 			return fetchWhatsAppGroups(client);
 		},
+		listContacts: async (query = "") => {
+			if (!client) return [];
+			return fetchWhatsAppContacts(client, query);
+		},
+		createWAGroup: async (name, participantIds = []) => {
+			if (!client) {
+				throw new Error("WhatsApp client is not connected");
+			}
+			const trimmedName = String(name || "").trim();
+			if (!trimmedName) {
+				throw new Error("Group name is required");
+			}
+			const ids = Array.isArray(participantIds)
+				? participantIds.map((id) => String(id).trim()).filter(Boolean)
+				: [];
+			if (!ids.length) {
+				throw new Error("At least one participant is required to create a group");
+			}
+			const result = await client.createGroup(trimmedName, ids);
+			const chatId = extractGroupChatIdFromCreateResult(result);
+			if (!chatId) {
+				throw new Error("Group was created but chatId could not be determined");
+			}
+			return {
+				chatId,
+				name: trimmedName,
+				participantCount: ids.length,
+				raw: result,
+			};
+		},
 		sendImageBuffer: async (
 			chatId,
 			buffer,
@@ -79,8 +121,19 @@ module.exports = async function ({ config }) {
 			if (!client) {
 				throw new Error("WhatsApp client is not connected");
 			}
+			const targetId = normalizeDispatchChatId(chatId);
 			const dataUrl = bufferToDataUrl(buffer, mimetype);
-			return client.sendImage(chatId, dataUrl, filename, caption);
+			const safeName =
+				filename ||
+				(mimetype === "image/jpeg" ? "screenshot.jpg" : "screenshot.png");
+			logger.info(
+				`Sending image to ${targetId} (${Math.round(buffer.length / 1024)} KB, ${mimetype})`
+			);
+			return withTimeout(
+				client.sendImage(targetId, dataUrl, safeName, caption || ""),
+				SEND_IMAGE_TIMEOUT_MS,
+				`sendImage(${targetId})`
+			);
 		},
 	};
 };

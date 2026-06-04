@@ -3,11 +3,54 @@ const WhatsAppGroup = require("../models/WhatsAppGroup");
 const { logger } = require("../utils");
 
 module.exports = async function ({ config, Services }) {
-	async function loadScheduler(schedulerId) {
-		return PhotoScheduler.findById(schedulerId).populate("group");
+	function defaultReportCaption() {
+		const today = new Date().toLocaleDateString("en-IN", {
+			day: "2-digit",
+			month: "short",
+			year: "numeric",
+		});
+		return `Productivity Report – ${today}`;
 	}
 
-	async function resolveTargetSchedules({ scheduleId, groupId }) {
+	async function loadScheduler(schedulerId) {
+		return PhotoScheduler.findById(schedulerId)
+			.populate("group")
+			.populate("groups");
+	}
+
+	function addGroupTarget(targetsByChatId, schedule, group) {
+		if (!group?.isActive || !group?.chatId) {
+			return;
+		}
+		targetsByChatId.set(String(group.chatId), { schedule, group });
+	}
+
+	function isPopulatedGroup(group) {
+		return group && typeof group === "object" && group.chatId != null;
+	}
+
+	function collectScheduleTargets(schedule, targetsByChatId) {
+		if (isPopulatedGroup(schedule.group)) {
+			addGroupTarget(targetsByChatId, schedule, schedule.group);
+		}
+		if (Array.isArray(schedule.groups)) {
+			for (const group of schedule.groups) {
+				if (isPopulatedGroup(group)) {
+					addGroupTarget(targetsByChatId, schedule, group);
+				}
+			}
+		}
+	}
+
+	async function sendToTargetsSequentially(targets, sendOne) {
+		const results = [];
+		for (const target of targets) {
+			results.push(await sendOne(target));
+		}
+		return results;
+	}
+
+	async function resolveTargetSchedules({ scheduleId, groupId, manual = false }) {
 		if (scheduleId) {
 			const schedule = await loadScheduler(scheduleId);
 			if (!schedule) {
@@ -16,13 +59,15 @@ module.exports = async function ({ config, Services }) {
 			if (!schedule.isActive) {
 				return { ok: false, reason: "scheduler_inactive" };
 			}
-			if (!schedule.isRunning) {
+			if (!manual && !schedule.isRunning) {
 				return { ok: false, reason: "scheduler_not_running" };
 			}
 			return { ok: true, schedules: [schedule] };
 		}
 
-		const filter = { isRunning: true, isActive: true };
+		const filter = manual
+			? { isActive: true }
+			: { isRunning: true, isActive: true };
 		if (groupId) {
 			const group = await WhatsAppGroup.findById(groupId);
 			if (!group) {
@@ -31,12 +76,14 @@ module.exports = async function ({ config, Services }) {
 			filter.group = groupId;
 		}
 
-		const schedules = await PhotoScheduler.find(filter).populate("group");
+		const schedules = await PhotoScheduler.find(filter)
+			.populate("group")
+			.populate("groups");
 		return { ok: true, schedules };
 	}
 
 	async function dispatchScreenshot(image, options = {}) {
-		const { scheduleId, groupId, caption: captionOverride } = options;
+		const { scheduleId, groupId, caption: captionOverride, manual = false } = options;
 
 		if (!image?.buffer?.length) {
 			return { ok: false, reason: "missing_screenshot" };
@@ -45,54 +92,117 @@ module.exports = async function ({ config, Services }) {
 			return { ok: false, reason: "whatsapp_not_ready" };
 		}
 
-		const resolved = await resolveTargetSchedules({ scheduleId, groupId });
+		const results = [];
+
+		if (manual && !scheduleId && !groupId) {
+			const groups = await WhatsAppGroup.find({
+				isActive: true,
+				chatId: { $exists: true, $ne: "" },
+			});
+			if (!groups.length) {
+				return { ok: false, reason: "no_active_target_groups" };
+			}
+			const caption = captionOverride || defaultReportCaption();
+			const manualResults = await sendToTargetsSequentially(groups, async (group) => {
+				try {
+					await Services.Whatsapp.sendImageBuffer(
+						group.chatId,
+						image.buffer,
+						image.mimetype,
+						caption,
+						image.filename
+					);
+					console.log(`Screenshot sent → "${group.name}" [manual]`);
+					return {
+						ok: true,
+						groupId: group._id,
+						groupName: group.name,
+						chatId: group.chatId,
+					};
+				} catch (err) {
+					logger.error(`Send failed for "${group.name}" (${group.chatId}):`, err.message);
+					return {
+						ok: false,
+						groupId: group._id,
+						groupName: group.name,
+						chatId: group.chatId,
+						error: err.message,
+					};
+				}
+			});
+			results.push(...manualResults);
+			const sent = results.filter((r) => r.ok).length;
+			if (!sent) {
+				return { ok: false, reason: "dispatch_failed", results };
+			}
+			return { ok: true, sent, results };
+		}
+
+		const resolved = await resolveTargetSchedules({ scheduleId, groupId, manual });
 		if (!resolved.ok) {
 			return resolved;
 		}
 
 		if (!resolved.schedules.length) {
-			return { ok: false, reason: "no_running_schedules" };
+			return { ok: false, reason: manual ? "no_active_target_groups" : "no_running_schedules" };
 		}
 
 		const targetsByChatId = new Map();
 		for (const schedule of resolved.schedules) {
-			const group = schedule.group;
-			if (!group?.isActive || !group?.chatId) {
-				continue;
-			}
-			targetsByChatId.set(String(group.chatId), { schedule, group });
+			collectScheduleTargets(schedule, targetsByChatId);
 		}
 
 		if (!targetsByChatId.size) {
 			return { ok: false, reason: "no_active_target_groups" };
 		}
 
-		const results = [];
-		for (const { schedule, group } of targetsByChatId.values()) {
-			const caption = captionOverride || schedule.caption || schedule.name || "";
-			await Services.Whatsapp.sendImageBuffer(
-				group.chatId,
-				image.buffer,
-				image.mimetype,
-				caption,
-				image.filename
-			);
-			results.push({
-				ok: true,
-				scheduleId: schedule._id,
-				scheduleName: schedule.name,
-				groupId: group._id,
-				groupName: group.name,
-				chatId: group.chatId,
-			});
-			console.log(
-				`Screenshot sent → "${group.name}" [schedule: ${schedule.name}]`
-			);
+		const targetList = [...targetsByChatId.values()];
+		const sendResults = await sendToTargetsSequentially(targetList, async ({ schedule, group }) => {
+			const caption =
+				captionOverride || schedule.caption || schedule.name || defaultReportCaption();
+			try {
+				await Services.Whatsapp.sendImageBuffer(
+					group.chatId,
+					image.buffer,
+					image.mimetype,
+					caption,
+					image.filename
+				);
+				console.log(`Screenshot sent → "${group.name}" [schedule: ${schedule.name}]`);
+				return {
+					ok: true,
+					scheduleId: schedule._id,
+					scheduleName: schedule.name,
+					groupId: group._id,
+					groupName: group.name,
+					chatId: group.chatId,
+				};
+			} catch (err) {
+				logger.error(
+					`Send failed for "${group.name}" (${group.chatId}) [${schedule.name}]:`,
+					err.message
+				);
+				return {
+					ok: false,
+					scheduleId: schedule._id,
+					scheduleName: schedule.name,
+					groupId: group._id,
+					groupName: group.name,
+					chatId: group.chatId,
+					error: err.message,
+				};
+			}
+		});
+		results.push(...sendResults);
+
+		const sent = results.filter((r) => r.ok).length;
+		if (!sent) {
+			return { ok: false, reason: "dispatch_failed", results };
 		}
 
 		return {
 			ok: true,
-			sent: results.length,
+			sent,
 			results,
 		};
 	}
@@ -105,10 +215,18 @@ module.exports = async function ({ config, Services }) {
 		if (!scheduler.isActive) {
 			return { ok: false, reason: "scheduler_inactive" };
 		}
-		if (!scheduler.group) {
+		const hasGroup =
+			(scheduler.group && scheduler.group._id) ||
+			(Array.isArray(scheduler.groups) && scheduler.groups.length > 0);
+		if (!hasGroup) {
 			return { ok: false, reason: "group_not_found" };
 		}
-		if (!scheduler.group.isActive) {
+		const primary = isPopulatedGroup(scheduler.group)
+			? scheduler.group
+			: isPopulatedGroup(scheduler.groups?.[0])
+				? scheduler.groups[0]
+				: null;
+		if (primary && !primary.isActive) {
 			return { ok: false, reason: "group_inactive" };
 		}
 
@@ -120,8 +238,11 @@ module.exports = async function ({ config, Services }) {
 		await scheduler.save();
 
 		console.log(
-			`Schedule enabled: "${scheduler.name}" (${scheduler._id}) — frontend should capture & POST screenshot every: ${scheduler.cron}`
+			`Schedule enabled: "${scheduler.name}" (${scheduler._id}) — backend cron will emit screenshot:capture every: ${scheduler.cron}`
 		);
+		if (Services.ScreenshotCron?.refresh) {
+			await Services.ScreenshotCron.refresh();
+		}
 		return { ok: true, started: true, scheduler: formatScheduler(scheduler) };
 	}
 
@@ -135,6 +256,9 @@ module.exports = async function ({ config, Services }) {
 		await scheduler.save();
 
 		console.log(`Schedule disabled: "${scheduler.name}" (${scheduler._id})`);
+		if (Services.ScreenshotCron?.refresh) {
+			await Services.ScreenshotCron.refresh();
+		}
 		return { ok: true, stopped: true, scheduler: formatScheduler(scheduler) };
 	}
 
@@ -162,8 +286,8 @@ module.exports = async function ({ config, Services }) {
 			globalEnabled: config.scheduler.enabled !== false,
 			defaultCron: config.scheduler.cron,
 			defaultTimezone: config.scheduler.timezone,
-			dispatchMode: "frontend_screenshot",
-			hint: "Frontend captures screenshots on each schedule cron interval and POSTs to /screenshots/dispatch",
+			dispatchMode: "backend_cron_socket",
+			hint: "Backend node-cron emits screenshot:capture over Socket.IO; ReportFlow UI captures and POSTs multipart to /screenshots/dispatch",
 			schedulers: schedulers.map((s) => formatScheduler(s)),
 		};
 	}
@@ -272,6 +396,10 @@ module.exports = async function ({ config, Services }) {
 
 		console.log(`Deleted ${deleteResult.deletedCount} screenshot dispatch schedule(s)`);
 
+		if (Services.ScreenshotCron?.refresh) {
+			await Services.ScreenshotCron.refresh();
+		}
+
 		return {
 			ok: true,
 			deletedCount: deleteResult.deletedCount,
@@ -286,11 +414,9 @@ module.exports = async function ({ config, Services }) {
 	async function restoreRunningSchedulers() {
 		const running = await PhotoScheduler.countDocuments({ isRunning: true, isActive: true });
 		console.log(
-			`${running} enabled screenshot schedule(s) — waiting for frontend POST /screenshots/dispatch`
+			`${running} enabled screenshot schedule(s) — backend cron + Socket.IO (ReportFlow UI must stay open)`
 		);
 	}
-
-	await restoreRunningSchedulers();
 
 	return {
 		getStatus,

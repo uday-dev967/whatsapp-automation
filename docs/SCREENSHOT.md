@@ -21,7 +21,8 @@ This API no longer sends images from a MongoDB photo library. **Your frontend ap
 | Role | Responsibility |
 |------|----------------|
 | **Backend** | Stores target groups + schedules; sends screenshot bytes to WhatsApp when asked |
-| **Frontend** | Captures screenshot at each schedule’s interval; calls `POST /screenshots/dispatch` |
+| **Backend** | `node-cron` per running schedule; emits `screenshot:capture` on Socket.IO |
+| **Frontend** | Listens on Socket.IO, captures screenshot, `POST /screenshots/dispatch` (multipart) |
 
 The `cron` field on a schedule is the **interval hint for the frontend** (e.g. `*/5 * * * *` = every 5 minutes). The server does **not** take screenshots itself.
 
@@ -74,7 +75,7 @@ Content-Type: application/json
 GET /Automation/v1.0/screenshot-dispatch-schedules?running=true
 ```
 
-Use each schedule’s `cron` to drive `setInterval` / `node-cron` / a scheduler library in the frontend.
+Activate schedules with `POST .../activate` (backend registers `node-cron`). Keep ReportFlow UI open so Socket.IO can trigger capture.
 
 ### 5. Frontend: capture and dispatch on each tick
 
@@ -200,7 +201,7 @@ for (const schedule of schedules) {
 - `GET /photo-library`
 - MongoDB `Photo` collection / `photoIds` on schedules
 - Server-side cron auto-send from DB images
-- `POST /photo-dispatch-schedules/.../dispatch-now` (use `POST /screenshots/dispatch` instead)
+- `POST /photo-dispatch-schedules/.../dispatch-now` (legacy name) → use `POST /screenshot-dispatch-schedules/:id/dispatch-now` (socket trigger) + `POST /screenshots/dispatch` (actual send with image)
 
 ---
 
