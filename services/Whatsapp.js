@@ -10,6 +10,12 @@ const {
 	fetchWhatsAppContacts,
 	extractGroupChatIdFromCreateResult,
 } = require("../utils/whatsappContacts");
+const {
+	fetchGroupMembers,
+	fetchGroupMembersAfterChange,
+	addGroupMembers,
+	removeGroupMembers,
+} = require("../utils/whatsappGroupMembers");
 
 const disabledService = {
 	isReady: () => false,
@@ -17,6 +23,14 @@ const disabledService = {
 	listGroups: async () => [],
 	listContacts: async () => [],
 	createWAGroup: async () => {
+		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
+	},
+	getGroupMembers: async () => [],
+	getGroupMembersAfterChange: async () => [],
+	addGroupMembers: async () => {
+		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
+	},
+	removeGroupMembers: async () => {
 		throw new Error("WhatsApp is not connected. Run npm run wa:server first.");
 	},
 	sendImageBuffer: async () => {
@@ -84,6 +98,26 @@ module.exports = async function ({ config }) {
 		listContacts: async (query = "") => {
 			if (!client) return [];
 			return fetchWhatsAppContacts(client, query);
+		},
+		getGroupMembers: async (chatId) => {
+			if (!client) return [];
+			return fetchGroupMembers(client, chatId);
+		},
+		getGroupMembersAfterChange: async (chatId, options = {}) => {
+			if (!client) return [];
+			return fetchGroupMembersAfterChange(client, chatId, options);
+		},
+		addGroupMembers: async (chatId, participantIds = []) => {
+			if (!client) {
+				throw new Error("WhatsApp client is not connected");
+			}
+			return addGroupMembers(client, chatId, participantIds);
+		},
+		removeGroupMembers: async (chatId, participantIds = []) => {
+			if (!client) {
+				throw new Error("WhatsApp client is not connected");
+			}
+			return removeGroupMembers(client, chatId, participantIds);
 		},
 		createWAGroup: async (name, participantIds = []) => {
 			if (!client) {

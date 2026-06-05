@@ -92,4 +92,7 @@ module.exports = {
 	fetchWhatsAppContacts,
 	extractGroupChatIdFromCreateResult,
 	normalizeContactId,
+	mapContact,
+	normalizeContactName,
+	normalizeContactPhone,
 };

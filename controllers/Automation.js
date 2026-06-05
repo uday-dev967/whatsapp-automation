@@ -297,6 +297,87 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
+		"GET /whatsapp/group-members": {
+			handler: async function (req, res) {
+				try {
+					if (!Services.Whatsapp.isReady()) {
+						return res.status(503).json({ ok: false, message: "WhatsApp client is not ready" });
+					}
+					const chatId = req.query.chatId != null ? String(req.query.chatId).trim() : "";
+					if (!chatId) {
+						return res.status(400).json({ ok: false, message: "chatId query parameter is required" });
+					}
+					const members = await Services.Whatsapp.getGroupMembers(chatId);
+					res.json({ ok: true, chatId, count: members.length, members });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"POST /whatsapp/group-members/add": {
+			handler: async function (req, res) {
+				try {
+					if (!Services.Whatsapp.isReady()) {
+						return res.status(503).json({ ok: false, message: "WhatsApp client is not ready" });
+					}
+					const { chatId, participantIds } = req.body || {};
+					if (!chatId || !Array.isArray(participantIds) || !participantIds.length) {
+						return res.status(400).json({
+							ok: false,
+							message: "chatId and a non-empty participantIds array are required",
+						});
+					}
+					const result = await Services.Whatsapp.addGroupMembers(chatId, participantIds);
+					const members = await Services.Whatsapp.getGroupMembersAfterChange(chatId, {
+						addedIds: participantIds,
+					});
+					res.json({
+						ok: true,
+						chatId: String(chatId).trim(),
+						...result,
+						count: members.length,
+						members,
+					});
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"POST /whatsapp/group-members/remove": {
+			handler: async function (req, res) {
+				try {
+					if (!Services.Whatsapp.isReady()) {
+						return res.status(503).json({ ok: false, message: "WhatsApp client is not ready" });
+					}
+					const { chatId, participantIds } = req.body || {};
+					if (!chatId || !Array.isArray(participantIds) || !participantIds.length) {
+						return res.status(400).json({
+							ok: false,
+							message: "chatId and a non-empty participantIds array are required",
+						});
+					}
+					const result = await Services.Whatsapp.removeGroupMembers(chatId, participantIds);
+					const members = await Services.Whatsapp.getGroupMembersAfterChange(chatId, {
+						removedIds: participantIds,
+					});
+					res.json({
+						ok: true,
+						chatId: String(chatId).trim(),
+						...result,
+						count: members.length,
+						members,
+					});
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
 		"POST /screenshots/dispatch": {
 			handler: async function (req, res) {
 				try {
