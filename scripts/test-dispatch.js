@@ -11,10 +11,6 @@ require("dotenv").config({ path: path.join(rootDir, `.env.${env}`) });
 const PORT = process.env.PORT || 5051;
 const BASE = `http://127.0.0.1:${PORT}/Automation/v1.0`;
 
-// Valid 1x1 PNG
-const TINY_IMAGE_BASE64 =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
 async function main() {
 	console.log("1. WhatsApp status...");
 	const statusRes = await fetch(`${BASE}/whatsapp/connection-status`);
@@ -35,15 +31,17 @@ async function main() {
 		process.exit(1);
 	}
 
-	console.log("3. POST /screenshots/dispatch (manual, tiny image)...");
-	const dispatchRes = await fetch(`${BASE}/screenshots/dispatch`, {
+	console.log("3. POST /reports/send (manual, server-generated report)...");
+	const dispatchRes = await fetch(`${BASE}/reports/send`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
-			imageBase64: TINY_IMAGE_BASE64,
-			mimeType: "image/png",
 			manual: true,
 			caption: "ReportFlow dispatch test",
+			filters: {
+				dateRange: "last30days",
+				reportType: "Productivity Report",
+			},
 		}),
 		signal: AbortSignal.timeout(180_000),
 	});

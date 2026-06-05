@@ -5,7 +5,10 @@ const SendLog = require("../models/SendLog");
 const { logger } = require("../utils");
 const { parseScheduleId, scheduleNotFoundResponse } = require("../utils/parseScheduleId");
 const { parseGroupId, validateScheduleIdList } = require("../utils/parseGroupId");
-const { screenshotFromRequest, assertValidScreenshot } = require("../utils/screenshotPayload");
+const {
+	normalizeFiltersFromBody,
+	normalizeScheduleFilters,
+} = require("../utils/dashboardFilters");
 
 async function listRegisteredGroups(req, res) {
 	const groups = await WhatsAppGroup.find().sort({ createdAt: 1 });
@@ -54,6 +57,42 @@ async function listRegisteredGroups(req, res) {
 
 module.exports.routes = function ({ Services, config }) {
 	return {
+		"GET /dashboard/summary": {
+			handler: async function (req, res) {
+				try {
+					const summary = await Services.Dashboard.getSummaryFromQuery(req.query);
+					res.json({ ok: true, ...summary });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"GET /dashboard/trend": {
+			handler: async function (req, res) {
+				try {
+					const trend = await Services.Dashboard.getTrendFromQuery(req.query);
+					res.json({ ok: true, ...trend });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
+		"GET /dashboard/filters": {
+			handler: async function (req, res) {
+				try {
+					const filters = await Services.Dashboard.getFilterOptions();
+					res.json({ ok: true, ...filters });
+				} catch (e) {
+					logger.error(e);
+					res.status(500).json({ ok: false, message: e.message });
+				}
+			},
+		},
+
 		"GET /registered-groups": {
 			handler: async function (req, res) {
 				try {
@@ -378,24 +417,10 @@ module.exports.routes = function ({ Services, config }) {
 			},
 		},
 
-		"POST /screenshots/dispatch": {
+		"POST /reports/send": {
 			handler: async function (req, res) {
 				try {
-					const image = screenshotFromRequest(req);
-					const imageCheck = image
-						? assertValidScreenshot(image)
-						: { ok: false, reason: "missing_screenshot" };
-					if (!imageCheck.ok) {
-						const { messageForReason } = require("../utils/dispatchMessages");
-						const reason = imageCheck.reason || "missing_screenshot";
-						return res.status(400).json({
-							ok: false,
-							message: messageForReason(reason) || reason,
-							result: { reason },
-						});
-					}
-
-					const { scheduleId, groupId, caption, manual } = req.body || {};
+					const { scheduleId, groupId, caption, manual, filters = {} } = req.body || {};
 					const isManual =
 						manual === true ||
 						manual === "true" ||
@@ -416,10 +441,13 @@ module.exports.routes = function ({ Services, config }) {
 					}
 
 					const { messageForReason } = require("../utils/dispatchMessages");
+					const normalizedFilters = normalizeFiltersFromBody(filters);
 
 					logger.info(
-						`POST /screenshots/dispatch — ${image.buffer.length} bytes, manual=${isManual}, scheduleId=${scheduleId || "(none)"}, waReady=${Services.Whatsapp.isReady()}`
+						`POST /reports/send — manual=${isManual}, scheduleId=${scheduleId || "(none)"}, waReady=${Services.Whatsapp.isReady()}`
 					);
+
+					const image = await Services.ReportImageService.generate(normalizedFilters);
 
 					const result = await Services.Scheduler.dispatchScreenshot(image, {
 						scheduleId: scheduleId ? String(scheduleId).trim() : undefined,
@@ -457,11 +485,11 @@ module.exports.routes = function ({ Services, config }) {
 					}).catch((e) => logger.error("SendLog write failed:", e));
 
 					logger.info(
-						`Dispatch complete — sent=${result.sent}, targets=${(result.results || []).length}`
+						`Report send complete — sent=${result.sent}, targets=${(result.results || []).length}`
 					);
 					res.json({ ok: true, result });
 				} catch (e) {
-					logger.error("POST /screenshots/dispatch failed:", e);
+					logger.error("POST /reports/send failed:", e);
 					res.status(500).json({ ok: false, message: e.message });
 				}
 			},
@@ -583,6 +611,7 @@ module.exports.routes = function ({ Services, config }) {
 						caption = "",
 						start = false,
 						isActive = true,
+						filters = {},
 					} = req.body;
 
 					let primaryGroupId = groupId;
@@ -612,6 +641,7 @@ module.exports.routes = function ({ Services, config }) {
 						caption,
 						isActive,
 						isRunning: false,
+						filters: normalizeScheduleFilters(filters),
 					});
 
 					let activateResult = null;
@@ -639,13 +669,17 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(parsed.status).json(parsed.body);
 					}
 
-					const { name, groupId, groupIds, cron, timezone, caption, isActive } = req.body;
+					const { name, groupId, groupIds, cron, timezone, caption, isActive, filters } =
+						req.body;
 					const updates = {};
 					if (name !== undefined) updates.name = name;
 					if (cron !== undefined) updates.cron = cron;
 					if (timezone !== undefined) updates.timezone = timezone;
 					if (caption !== undefined) updates.caption = caption;
 					if (isActive !== undefined) updates.isActive = isActive;
+					if (filters !== undefined) {
+						updates.filters = normalizeScheduleFilters(filters);
+					}
 
 					if (groupId !== undefined) {
 						const g = await WhatsAppGroup.findById(groupId);
@@ -701,14 +735,18 @@ module.exports.routes = function ({ Services, config }) {
 
 					const result = await Services.ScreenshotCron.triggerNow(parsed.scheduleId);
 					if (!result.ok) {
-						const status = result.reason === "scheduler_not_found" ? 404 : 400;
+						const status =
+							result.reason === "scheduler_not_found"
+								? 404
+								: result.reason === "whatsapp_not_ready"
+									? 503
+									: 400;
 						return res.status(status).json({ ok: false, ...result });
 					}
 
 					res.json({
 						ok: true,
-						message:
-							"Capture requested via Socket.IO — ensure ReportFlow UI is open, then it will POST /screenshots/dispatch",
+						message: "Report generated and sent to WhatsApp groups",
 						result,
 					});
 				} catch (e) {

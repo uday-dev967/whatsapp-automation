@@ -41,6 +41,40 @@ const screenshotDispatchScheduleSchema = new mongoose.Schema(
 			type: Boolean,
 			default: true,
 		},
+		filters: {
+			states: {
+				type: [String],
+				default: [],
+			},
+			regions: {
+				type: [String],
+				default: [],
+			},
+			managers: {
+				type: [String],
+				default: [],
+			},
+			reportType: {
+				type: String,
+				default: "Productivity Report",
+				trim: true,
+			},
+			dateRange: {
+				type: String,
+				default: "last30days",
+				trim: true,
+			},
+			startDate: {
+				type: String,
+				default: "",
+				trim: true,
+			},
+			endDate: {
+				type: String,
+				default: "",
+				trim: true,
+			},
+		},
 	},
 	{ timestamps: true }
 );

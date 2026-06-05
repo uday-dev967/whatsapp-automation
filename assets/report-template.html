@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Productivity Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4f6f9;
+      color: #1a1a2e;
+      padding: 24px;
+      width: 1200px;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 20px 28px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .header .meta { font-size: 13px; opacity: 0.8; }
+    .filters-bar {
+      background: #fff;
+      border-radius: 10px;
+      padding: 12px 20px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: #555;
+      border: 1px solid #e8ecf0;
+    }
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .kpi-card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 16px 20px;
+      border: 1px solid #e8ecf0;
+    }
+    .kpi-card .label { font-size: 12px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-card .value { font-size: 24px; font-weight: 700; color: #1a1a2e; }
+    .kpi-card .sub { font-size: 12px; color: #666; margin-top: 4px; }
+    .kpi-card.highlight .value { color: #2e7d32; }
+    .kpi-card.warn .value { color: #c62828; }
+    .section {
+      background: #fff;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border: 1px solid #e8ecf0;
+    }
+    .section h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: #333; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      background: #f0f4f8;
+      padding: 10px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #555;
+      border-bottom: 2px solid #e0e6ed;
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid #f0f4f8; }
+    tr:nth-child(even) td { background: #fafbfc; }
+    .pct-good { color: #2e7d32; font-weight: 600; }
+    .pct-warn { color: #e65100; font-weight: 600; }
+    .pct-bad { color: #c62828; font-weight: 600; }
+    .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .chart-wrap { height: 280px; position: relative; }
+    #charts-ready { display: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1 id="report-title">Productivity Report</h1>
+    <div class="meta" id="report-date"></div>
+  </div>
+  <div class="filters-bar" id="filters-summary"></div>
+
+  <div class="kpi-row" id="kpi-row"></div>
+
+  <div class="section">
+    <h2>State Performance</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Region</th>
+          <th>Manager</th>
+          <th>Target (₹ Cr)</th>
+          <th>Achievement (₹ Cr)</th>
+          <th>Achievement %</th>
+          <th>SKUs</th>
+          <th>Orders</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+
+  <div class="charts-row">
+    <div class="section">
+      <h2>Achievement % by State</h2>
+      <div class="chart-wrap"><canvas id="bar-chart"></canvas></div>
+    </div>
+    <div class="section">
+      <h2>Region Contribution</h2>
+      <div class="chart-wrap"><canvas id="doughnut-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div id="charts-ready"></div>
+
+  <!-- __REPORT_DATA_PLACEHOLDER__ -->
+  <script>
+    const data = window.__REPORT_DATA__;
+
+    function pctClass(pct) {
+      if (pct >= 95) return 'pct-good';
+      if (pct >= 75) return 'pct-warn';
+      return 'pct-bad';
+    }
+
+    function formatFilters(filters) {
+      const parts = [];
+      if (filters.states?.length) parts.push('States: ' + filters.states.join(', '));
+      else parts.push('States: All');
+      if (filters.regions?.length) parts.push('Regions: ' + filters.regions.join(', '));
+      else parts.push('Regions: All');
+      if (filters.managers?.length) parts.push('Managers: ' + filters.managers.join(', '));
+      else parts.push('Managers: All');
+      parts.push('Report: ' + (filters.reportType || 'Productivity Report'));
+      if (filters.startDate || filters.endDate) {
+        parts.push('Period: ' + (filters.startDate || '…') + ' to ' + (filters.endDate || '…'));
+      } else {
+        parts.push('Period: ' + (filters.dateRangeLabel || filters.dateRange || 'last30days'));
+      }
+      return parts.join(' · ');
+    }
+
+    document.getElementById('report-title').textContent = data.title || 'Productivity Report';
+    document.getElementById('report-date').textContent = data.generatedAt || '';
+    document.getElementById('filters-summary').textContent = formatFilters(data.filters || {});
+
+    const kpis = data.kpis || {};
+    const kpiRow = document.getElementById('kpi-row');
+    const kpiItems = [
+      { label: 'Total Target', value: '₹' + (kpis.totalTarget || 0) + ' Cr', sub: kpis.stateCount + ' states' },
+      { label: 'Total Achievement', value: '₹' + (kpis.totalAchievement || 0) + ' Cr', sub: 'Cumulative' },
+      { label: 'Avg Achievement %', value: (kpis.avgAchievementPct || 0) + '%', sub: 'Across filtered states', cls: 'highlight' },
+      { label: 'Top State', value: kpis.topState ? kpis.topState.state : '—', sub: kpis.topState ? kpis.topState.achievementPct + '%' : '', cls: 'highlight' },
+    ];
+    kpiItems.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'kpi-card' + (item.cls ? ' ' + item.cls : '');
+      div.innerHTML = '<div class="label">' + item.label + '</div><div class="value">' + item.value + '</div><div class="sub">' + (item.sub || '') + '</div>';
+      kpiRow.appendChild(div);
+    });
+
+    const tbody = document.getElementById('table-body');
+    (data.rows || []).forEach(row => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + row.state + '</td><td>' + row.region + '</td><td>' + row.manager + '</td><td>' + row.target + '</td><td>' + row.achievement + '</td><td class="' + pctClass(row.achievementPct) + '">' + row.achievementPct + '%</td><td>' + row.activeSKUs + '</td><td>' + row.ordersCount.toLocaleString() + '</td>';
+      tbody.appendChild(tr);
+    });
+
+    const rows = data.rows || [];
+    const regionData = data.regionContribution || [];
+
+    const barCtx = document.getElementById('bar-chart').getContext('2d');
+    new Chart(barCtx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(r => r.state),
+        datasets: [{
+          label: 'Achievement %',
+          data: rows.map(r => r.achievementPct),
+          backgroundColor: rows.map(r => r.achievementPct >= 95 ? '#4caf50' : r.achievementPct >= 75 ? '#ff9800' : '#f44336'),
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, max: 120, ticks: { callback: v => v + '%' } },
+          x: { ticks: { maxRotation: 45, minRotation: 45, font: { size: 10 } } },
+        },
+      },
+    });
+
+    const doughnutCtx = document.getElementById('doughnut-chart').getContext('2d');
+    const regionColors = { North: '#3f51b5', South: '#009688', East: '#ff5722', West: '#9c27b0' };
+    new Chart(doughnutCtx, {
+      type: 'doughnut',
+      data: {
+        labels: regionData.map(r => r.region),
+        datasets: [{
+          data: regionData.map(r => r.achievement),
+          backgroundColor: regionData.map(r => regionColors[r.region] || '#607d8b'),
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        plugins: {
+          legend: { position: 'right', labels: { font: { size: 12 } } },
+        },
+      },
+    });
+
+    document.getElementById('charts-ready').textContent = 'ready';
+  </script>
+</body>
+</html>

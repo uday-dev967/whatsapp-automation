@@ -112,7 +112,7 @@ module.exports = async function ({ config, Services }) {
 						caption,
 						image.filename
 					);
-					console.log(`Screenshot sent → "${group.name}" [manual]`);
+					// console.log(`Screenshot sent → "${group.name}" [manual]`);
 					return {
 						ok: true,
 						groupId: group._id,
@@ -168,7 +168,7 @@ module.exports = async function ({ config, Services }) {
 					caption,
 					image.filename
 				);
-				console.log(`Screenshot sent → "${group.name}" [schedule: ${schedule.name}]`);
+				// console.log(`Screenshot sent → "${group.name}" [schedule: ${schedule.name}]`);
 				return {
 					ok: true,
 					scheduleId: schedule._id,
@@ -237,9 +237,9 @@ module.exports = async function ({ config, Services }) {
 		scheduler.isRunning = true;
 		await scheduler.save();
 
-		console.log(
-			`Schedule enabled: "${scheduler.name}" (${scheduler._id}) — backend cron will emit screenshot:capture every: ${scheduler.cron}`
-		);
+		// console.log(
+		// 	`Schedule enabled: "${scheduler.name}" (${scheduler._id}) — backend cron will emit screenshot:capture every: ${scheduler.cron}`
+		// );
 		if (Services.ScreenshotCron?.refresh) {
 			await Services.ScreenshotCron.refresh();
 		}
@@ -255,7 +255,7 @@ module.exports = async function ({ config, Services }) {
 		scheduler.isRunning = false;
 		await scheduler.save();
 
-		console.log(`Schedule disabled: "${scheduler.name}" (${scheduler._id})`);
+		// console.log(`Schedule disabled: "${scheduler.name}" (${scheduler._id})`);
 		if (Services.ScreenshotCron?.refresh) {
 			await Services.ScreenshotCron.refresh();
 		}
@@ -272,6 +272,7 @@ module.exports = async function ({ config, Services }) {
 			cron: scheduler.cron,
 			timezone: scheduler.timezone,
 			caption: scheduler.caption,
+			filters: scheduler.filters,
 			isRunning: scheduler.isRunning,
 			isActive: scheduler.isActive,
 		};
@@ -286,8 +287,8 @@ module.exports = async function ({ config, Services }) {
 			globalEnabled: config.scheduler.enabled !== false,
 			defaultCron: config.scheduler.cron,
 			defaultTimezone: config.scheduler.timezone,
-			dispatchMode: "backend_cron_socket",
-			hint: "Backend node-cron emits screenshot:capture over Socket.IO; ReportFlow UI captures and POSTs multipart to /screenshots/dispatch",
+			dispatchMode: "backend_cron_report",
+			hint: "Backend node-cron generates report images server-side and sends directly to WhatsApp",
 			schedulers: schedulers.map((s) => formatScheduler(s)),
 		};
 	}
@@ -319,9 +320,9 @@ module.exports = async function ({ config, Services }) {
 
 		const activated = results.filter((r) => r.started || r.alreadyRunning).length;
 
-		console.log(
-			`Group activate-all: ${found.group.name} (${groupId}) — ${activated}/${results.length} enabled`
-		);
+		// console.log(
+		// 	`Group activate-all: ${found.group.name} (${groupId}) — ${activated}/${results.length} enabled`
+		// );
 
 		return {
 			ok: true,
@@ -352,9 +353,9 @@ module.exports = async function ({ config, Services }) {
 
 		const deactivated = results.filter((r) => r.stopped).length;
 
-		console.log(
-			`Group deactivate-all: ${found.group.name} (${groupId}) — ${deactivated}/${results.length} disabled`
-		);
+		// console.log(
+		// 	`Group deactivate-all: ${found.group.name} (${groupId}) — ${deactivated}/${results.length} disabled`
+		// );
 
 		return {
 			ok: true,
@@ -394,7 +395,7 @@ module.exports = async function ({ config, Services }) {
 			_id: { $in: schedules.map((s) => s._id) },
 		});
 
-		console.log(`Deleted ${deleteResult.deletedCount} screenshot dispatch schedule(s)`);
+		// console.log(`Deleted ${deleteResult.deletedCount} screenshot dispatch schedule(s)`);
 
 		if (Services.ScreenshotCron?.refresh) {
 			await Services.ScreenshotCron.refresh();
@@ -413,9 +414,9 @@ module.exports = async function ({ config, Services }) {
 
 	async function restoreRunningSchedulers() {
 		const running = await PhotoScheduler.countDocuments({ isRunning: true, isActive: true });
-		console.log(
-			`${running} enabled screenshot schedule(s) — backend cron + Socket.IO (ReportFlow UI must stay open)`
-		);
+		// console.log(
+		// 	`${running} enabled screenshot schedule(s) — backend cron + Socket.IO (ReportFlow UI must stay open)`
+		// );
 	}
 
 	return {

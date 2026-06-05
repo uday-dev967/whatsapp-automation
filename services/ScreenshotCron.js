@@ -1,14 +1,10 @@
 const cron = require("node-cron");
 const PhotoScheduler = require("../models/PhotoScheduler");
+const SendLog = require("../models/SendLog");
 const { logger } = require("../utils");
 
 module.exports = async function ({ config, Services }) {
-	let io = null;
 	const tasks = new Map();
-
-	function setIo(socketIo) {
-		io = socketIo;
-	}
 
 	function stopJob(scheduleId) {
 		const id = String(scheduleId);
@@ -25,33 +21,60 @@ module.exports = async function ({ config, Services }) {
 		}
 	}
 
-	async function emitCapture(schedule) {
-		const payload = {
-			scheduleId: String(schedule._id),
-			scheduleName: schedule.name,
-			caption: schedule.caption || "",
-			cron: schedule.cron,
-		};
+	async function generateAndSend(schedule) {
+		const scheduleId = String(schedule._id);
+		const filters = schedule.filters || {};
 
-		if (!io) {
-			logger.warn(
-				`Cron tick for "${schedule.name}" but no Socket.IO server — open ReportFlow UI`
+		try {
+			logger.info(`Cron tick → generating report for "${schedule.name}"`);
+
+			const image = await Services.ReportImageService.generate(filters);
+			const result = await Services.Scheduler.dispatchScreenshot(image, {
+				scheduleId,
+				caption: schedule.caption || undefined,
+			});
+
+			if (!result.ok) {
+				const { messageForReason } = require("../utils/dispatchMessages");
+				const message = messageForReason(result.reason) || result.reason;
+				await SendLog.create({
+					scheduleId: schedule._id,
+					scheduleName: schedule.name,
+					groupCount: 0,
+					status: "failed",
+					errorMessage: message,
+					sentAt: new Date(),
+				}).catch((e) => logger.error("SendLog write failed:", e));
+				logger.warn(`Cron send failed for "${schedule.name}": ${message}`);
+				return { ok: false, reason: result.reason, result };
+			}
+
+			const firstResult = result.results?.[0];
+			await SendLog.create({
+				scheduleId: firstResult?.scheduleId || schedule._id,
+				scheduleName: firstResult?.scheduleName || schedule.name,
+				groupIds: (result.results || []).map((r) => r.groupId),
+				groupCount: result.sent || 0,
+				status: "success",
+				sentAt: new Date(),
+			}).catch((e) => logger.error("SendLog write failed:", e));
+
+			console.log(
+				`Cron tick → report sent for "${schedule.name}" (${result.sent} group(s))`
 			);
-			return { ok: false, reason: "socket_not_ready" };
+			return { ok: true, sent: result.sent, result };
+		} catch (err) {
+			logger.error(`Cron generate/send failed for "${schedule.name}":`, err.message);
+			await SendLog.create({
+				scheduleId: schedule._id,
+				scheduleName: schedule.name,
+				groupCount: 0,
+				status: "failed",
+				errorMessage: err.message,
+				sentAt: new Date(),
+			}).catch((e) => logger.error("SendLog write failed:", e));
+			return { ok: false, reason: "report_generation_failed", error: err.message };
 		}
-
-		const connected = io.engine?.clientsCount ?? 0;
-		if (connected === 0) {
-			logger.warn(
-				`Cron tick for "${schedule.name}" but no ReportFlow UI connected — open the app in a browser tab`
-			);
-		}
-
-		io.emit("screenshot:capture", payload);
-		console.log(
-			`Cron tick → screenshot:capture "${schedule.name}" (${connected} UI client(s) connected)`
-		);
-		return { ok: true, emitted: true, clientsConnected: connected };
 	}
 
 	async function refresh() {
@@ -78,7 +101,7 @@ module.exports = async function ({ config, Services }) {
 			const task = cron.schedule(
 				schedule.cron,
 				() => {
-					emitCapture(schedule).catch((err) => logger.error(err));
+					generateAndSend(schedule).catch((err) => logger.error(err));
 				},
 				{ timezone: schedule.timezone || config.scheduler.timezone }
 			);
@@ -100,13 +123,13 @@ module.exports = async function ({ config, Services }) {
 		if (!schedule.isActive) {
 			return { ok: false, reason: "scheduler_inactive" };
 		}
-		return emitCapture(schedule);
+		return generateAndSend(schedule);
 	}
 
 	return {
-		setIo,
 		refresh,
 		triggerNow,
 		stopAllJobs,
+		generateAndSend,
 	};
 };

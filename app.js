@@ -193,32 +193,20 @@ process.on("unhandledRejection", (error) => {
 
 load()
 	.then(async ({ Services }) => {
-		const http = require("http");
-		const { Server } = require("socket.io");
-		const server = http.createServer(app);
-		const io = new Server(server, {
-			cors: { origin: true, credentials: true },
-		});
-
-		io.on("connection", (socket) => {
-			logger.info(`ReportFlow socket connected: ${socket.id}`);
-		});
-
-		if (Services.ScreenshotCron?.setIo) {
-			Services.ScreenshotCron.setIo(io);
+		if (Services.ScreenshotCron?.refresh) {
 			await Services.ScreenshotCron.refresh();
 		}
 
-		server.timeout = 300_000;
-		server.keepAliveTimeout = 305_000;
-		server.headersTimeout = 310_000;
-
-		server.listen(port, function () {
-			logger.info(`Listening on ${port} (HTTP + Socket.IO)`);
+		const server = app.listen(port, function () {
+			logger.info(`Listening on ${port}`);
 			if (process.send) {
 				process.send("ready");
 			}
 		});
+
+		server.timeout = 300_000;
+		server.keepAliveTimeout = 305_000;
+		server.headersTimeout = 310_000;
 	})
 	.catch((error) => {
 		console.log("Error while intializing : ", error);
