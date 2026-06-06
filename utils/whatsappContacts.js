@@ -49,6 +49,41 @@ function isPersonalContact(contact) {
 	return id.endsWith("@c.us") || id.endsWith("@s.whatsapp.net");
 }
 
+function pickBetterContactName(a, b) {
+	const nameA = String(a || "").trim();
+	const nameB = String(b || "").trim();
+	const aKnown = nameA && nameA !== "Unknown";
+	const bKnown = nameB && nameB !== "Unknown";
+	if (aKnown && !bKnown) return nameA;
+	if (bKnown && !aKnown) return nameB;
+	if (nameA.length >= nameB.length) return nameA || "Unknown";
+	return nameB || "Unknown";
+}
+
+function dedupeContacts(contacts) {
+	const byPhone = new Map();
+	for (const contact of contacts) {
+		const phone = String(contact?.phone || "").trim();
+		if (!phone) continue;
+
+		const canonical = {
+			id: `${phone}@c.us`,
+			name: contact.name || "Unknown",
+			phone,
+		};
+
+		if (!byPhone.has(phone)) {
+			byPhone.set(phone, canonical);
+			continue;
+		}
+
+		const existing = byPhone.get(phone);
+		existing.name = pickBetterContactName(existing.name, canonical.name);
+	}
+
+	return [...byPhone.values()];
+}
+
 async function fetchWhatsAppContacts(client, query = "") {
 	if (!client) return [];
 
@@ -61,6 +96,7 @@ async function fetchWhatsAppContacts(client, query = "") {
 	}
 
 	let mapped = contacts.filter(isPersonalContact).map(mapContact).filter(Boolean);
+	mapped = dedupeContacts(mapped);
 
 	const q = String(query || "")
 		.trim()
@@ -95,4 +131,5 @@ module.exports = {
 	mapContact,
 	normalizeContactName,
 	normalizeContactPhone,
+	dedupeContacts,
 };
