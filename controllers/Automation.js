@@ -118,15 +118,7 @@ module.exports.routes = function ({ Services, config }) {
 		"POST /target-groups": {
 			handler: async function (req, res) {
 				try {
-					const {
-						name,
-						chatId,
-						isActive = true,
-						state = "",
-						region = "",
-						manager = "",
-						reportTypes = ["Productivity Report"],
-					} = req.body;
+					const { name, chatId, isActive = true } = req.body;
 
 					if (!name || !chatId) {
 						return res.status(400).json({ ok: false, message: "name and chatId are required" });
@@ -136,10 +128,6 @@ module.exports.routes = function ({ Services, config }) {
 						name,
 						chatId,
 						isActive,
-						state,
-						region,
-						manager,
-						reportTypes,
 					});
 
 					res.status(201).json({ ok: true, group });
@@ -161,15 +149,11 @@ module.exports.routes = function ({ Services, config }) {
 						return res.status(parsed.status).json(parsed.body);
 					}
 
-					const { name, chatId, isActive, state, region, manager, reportTypes } = req.body;
+					const { name, chatId, isActive } = req.body;
 					const updates = {};
 					if (name !== undefined) updates.name = name;
 					if (chatId !== undefined) updates.chatId = chatId;
 					if (isActive !== undefined) updates.isActive = isActive;
-					if (state !== undefined) updates.state = state;
-					if (region !== undefined) updates.region = region;
-					if (manager !== undefined) updates.manager = manager;
-					if (reportTypes !== undefined) updates.reportTypes = reportTypes;
 
 					const group = await WhatsAppGroup.findByIdAndUpdate(
 						parsed.groupId,
